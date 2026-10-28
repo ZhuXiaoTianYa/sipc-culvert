@@ -494,11 +494,38 @@ class SSEJSONAdapter:
             "Accept": "text/event-stream, application/json",
         }
 
+    @staticmethod
+    def _render_tool_call(name: str, args: str) -> str:
+        """把一次工具调用还原成「我们要求模型输出的那种 JSON」。
+
+        历史里还要保持同一种写法，模型才知道「我上一轮调了工具」而不是
+        「我上一轮说了句莫名其妙的话」。
+        """
+        raw = (args or "").strip()
+        if not raw:
+            arg_obj: Any = {}
+        else:
+            try:
+                arg_obj = json.loads(raw)
+            except json.JSONDecodeError:
+                # 参数不是合法 JSON 就原样塞进字符串里，别吞掉信息
+                arg_obj = {"_raw": raw}
+        return json.dumps(
+            {"tool_call": {"name": name, "arguments": arg_obj}}, ensure_ascii=False
+        )
+
     def _fold_tool_results(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """把 OpenAI 的 role=tool 消息折叠成普通文本。
 
         这类上游没有「工具结果」这个通道，只能当成一条 user 消息塞回去，
         否则整条消息会被上游直接忽略，模型永远看不到工具跑了什么。
+
+        两处必须小心，都踩过：
+        1. 模型自己发出的 tool_calls，历史里要还原成**同一套 JSON 写法**。
+           早先这里写的是 `"[已调用工具]"` 这种占位句子，结果模型照着学舌，
+           每轮只回那五个字、不再真的调工具 —— 表现为「走一步就要人说一次」。
+        2. 工具结果后面要补一句「接下来该干什么」。否则模型容易把
+           「拿到结果」当成任务完成，停在这里等下一句指令。
         """
         names: dict[str, str] = {}
         for m in messages:
@@ -511,11 +538,30 @@ class SSEJSONAdapter:
             role = m.get("role")
             if role == "tool":
                 nm = names.get(m.get("tool_call_id"), "tool")
+                body = str(m.get("content") or "")
                 out.append(
-                    {"role": "user", "content": f"[工具 {nm} 的执行结果]\n{m.get('content') or ''}"}
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[工具 {nm} 的执行结果]\n{body}\n\n"
+                            "（继续：还需要更多信息就再调用一次工具；"
+                            "已经足够就直接给出最终答复，不要再输出工具调用的 JSON。）"
+                        ),
+                    }
                 )
-            elif role == "assistant" and m.get("tool_calls") and not m.get("content"):
-                out.append({"role": "assistant", "content": "[已调用工具]"})
+            elif role == "assistant" and m.get("tool_calls"):
+                rendered = "\n".join(
+                    self._render_tool_call(
+                        (tc.get("function") or {}).get("name", "tool"),
+                        (tc.get("function") or {}).get("arguments", ""),
+                    )
+                    for tc in m["tool_calls"]
+                )
+                # 模型可能一边说话一边调工具，前面的话要留着
+                head = str(m.get("content") or "").strip()
+                out.append(
+                    {"role": "assistant", "content": (head + "\n" + rendered).strip()}
+                )
             else:
                 out.append({"role": role, "content": m.get("content") or ""})
         return out
@@ -538,12 +584,13 @@ class SSEJSONAdapter:
         if not spec:
             return ""
         return (
-            "你可以调用下面这些工具。规则：\n"
+            "你可以调用下面这些工具，目的是把用户交代的任务真正做完。规则：\n"
             "1. 需要调用工具时，只输出一行 JSON，前后不要有任何别的文字，也不要用代码块包裹：\n"
             '   {"tool_call": {"name": "工具名", "arguments": {"参数": "值"}}}\n'
             "2. 一次只调用一个工具。\n"
             "3. 不需要调用工具时，就正常回答，不要输出这种 JSON。\n"
-            "4. 看到 [工具 xxx 的执行结果] 之后，用自然语言把结论讲清楚。\n"
+            "4. 看到 [工具 xxx 的执行结果] 之后：任务还没完成，就继续输出下一次工具调用的 JSON；\n"
+            "   全部做完了，再用自然语言把结果讲清楚。不要只说一句「已调用工具」就停下。\n"
             "可用工具：\n" + json.dumps(spec, ensure_ascii=False)
         )
 
