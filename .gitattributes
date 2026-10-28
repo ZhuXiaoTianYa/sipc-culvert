@@ -1,0 +1,14 @@
+# 统一换行符，避免不同平台 clone 下来出现「同一份代码行为不同」。
+#
+# *.bat 必须固定 CRLF：批处理解释器解析多行 if (...) 块时依赖 CRLF，
+# 一旦变成 LF，块会被撑坏，命令被切成碎片（曾出现过 'd' 不是内部或外部命令）。
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制，别做任何转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.gif binary

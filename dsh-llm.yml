@@ -1,0 +1,47 @@
+# 让 dsh 指向本地 OpenAI 兼容网关的 patch 层。
+#
+# 用法：
+#   dsh --profile headless --patch ./dsh-llm.yml "你好"
+#
+# 注意：patch 是「整块替换 config」，不做深度合并，
+# 所以这里必须写出某个 entry 的完整 config，不能只写要改的那几个键。
+
+# 1) 注册一个自定义 provider 路由（路由名 = lab-gateway）
+- id: llm-pi-ai
+  config:
+    providers:
+      lab-gateway:
+        # 自定义网关必须显式声明线协议，因为没有内置目录可继承
+        api: openai-completions
+        baseURL: http://127.0.0.1:8200/v1
+        # 这里填的是「环境变量名」，不是密钥本身
+        apiKeyEnv: LAB_GATEWAY_KEY
+        models:
+          # 模型 id 必须和 .env 里的 SSEJSON_MODEL / CAMPUS_MODEL 对上。
+          # 网关不校验模型名，但 /v1/models 只会返回当前模式的那一个，
+          # 这里把两种都列上，切模式时 dsh 里能直接选。
+          - id: ssejson-agent-v1
+            name: SSEJSON Agent (MODE=ssejson)
+            contextWindow: 32000
+            maxTokens: 4096
+            input: [text]
+          - id: campus-agent-v1
+            name: Campus Agent (MODE=campus)
+            contextWindow: 32000
+            maxTokens: 4096
+            input: [text]
+        timeoutMs: 120000
+        # 私有网关兼容开关：本地模拟上游不支持这些能力，全部关掉
+        compat:
+          supportsDeveloperRole: false
+          supportsReasoningEffort: false
+          supportsUsageInStreaming: true
+          supportsFinishReason: true
+          maxTokensField: max_tokens
+
+# 2) 把默认模型指向刚注册的路由
+- id: agent-default-model
+  config:
+    provider: lab-gateway
+    # 跟当前 .env 的 MODE 保持一致
+    model: ssejson-agent-v1

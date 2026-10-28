@@ -1,0 +1,18 @@
+# 本地配置：里面有你的上游地址和凭据，绝不入库
+.env
+
+# 工具与缓存
+.workbuddy/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
